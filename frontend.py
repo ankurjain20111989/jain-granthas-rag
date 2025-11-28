@@ -1,68 +1,77 @@
 import streamlit as st
 from datetime import datetime
 import httpx
+import os
+
+# Backend URL from environment (Render/Streamlit Cloud)
+BACKEND_URL = os.getenv("BACKEND_URL", "https://jain-granthas-backend.onrender.com")
+API_CHAT_ENDPOINT = f"{BACKEND_URL}/invoke/tool/travel_agent_prompt"
+API_UPLOAD_ENDPOINT = f"{BACKEND_URL}/upload_file/"
 
 # Keep message history
-st.session_state.setdefault("log", [])
+if "log" not in st.session_state:
+    st.session_state.log = []
 
 # Page setup
 st.set_page_config(page_title="Jain Granthas Search", page_icon="📖")
 st.title("📖 Upload and Search Jain Granthas")
 
-# Call your Gemini File Search backend
+# Status sidebar FIRST (shows backend URL)
+with st.sidebar:
+    st.markdown("### 🔧 Status")
+    st.info(f"**Backend**: {BACKEND_URL}")
+    st.info("**Files**: Auto-indexed | **Query**: Semantic search")
+    st.caption("✅ Production ready")
+
+# Call backend API
 def call_gemini_agent(prompt):
     try:
         response = httpx.post(
-            "http://localhost:3000/invoke/tool/travel_agent_prompt",
+            API_CHAT_ENDPOINT,
             json={"input": {"input": prompt}},
-            timeout=120.0  # File Search can take longer
+            timeout=120.0
         )
         response.raise_for_status()
         data = response.json().get("result", {})
-        return {"output": data.get("output", "")}
+        return {"output": data.get("output", ""), "files": data.get("files", [])}
     except Exception as e:
-        return {"output": f"Error: {str(e)}"}
+        return {"output": f"❌ Backend error: {str(e)}"}
 
 # Display chat history
 def show_history():
-    for turn in st.session_state.log[-10:]:  # Show last 10 exchanges
+    for turn in st.session_state.log[-10:]:
         msg = st.chat_message(turn["role"])
         msg.write(turn["content"])
 
 # --- 📂 File Upload Section ---
-st.subheader("📂 Upload Granthas (PDF, TXT, CSV)")
+st.subheader("📂 Upload Granthas (PDF, TXT, CSV, DOCX)")
 uploaded_file = st.file_uploader(
-    "Choose a Jain grantha file", 
+    "Choose a Jain grantha file",
     type=["pdf", "txt", "csv", "docx"],
     help="Upload PDF granthas, text files, or CSV data for search"
 )
 
 if uploaded_file is not None:
-    with st.spinner(f"Indexing {uploaded_file.name} in Gemini File Search..."):
+    with st.spinner(f"Indexing {uploaded_file.name}..."):
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
         try:
             resp = httpx.post(
-                "http://localhost:3000/upload_file/",
+                API_UPLOAD_ENDPOINT,
                 files=files,
                 timeout=120.0
             )
             resp.raise_for_status()
             result = resp.json()
-            st.success(result.get("message", "✅ File indexed successfully!"))
-            st.caption(f"Store: {result.get('store_name', 'created')}")
+            if "error" in result:
+                st.error(result["error"])
+            else:
+                st.success(result.get("message", "✅ File indexed!"))
+                st.caption(f"File: {result.get('file_name', 'uploaded')}")
         except Exception as e:
             st.error(f"Upload failed: {str(e)}")
 
-# Sidebar info
-with st.sidebar:
-    st.markdown("### 🔧 Status")
-    st.info("**Backend**: Gemini File Search\n**Files**: Auto-indexed\n**Query**: Semantic search across all uploads")
-    st.caption("Run backend: `uvicorn app:app --port 3000`")
-
 # --- 🔍 Query Section ---
 st.subheader("🔍 Ask Questions About Your Granthas")
-
-# Show history first
 show_history()
 
 # Main chat input
@@ -73,11 +82,16 @@ if prompt := st.chat_input("Ask about Jain granthas, upanishads, or uploaded fil
 
     # Agent response
     with st.chat_message("assistant"):
-        with st.spinner("Searching your files with Gemini..."):
+        with st.spinner("🔍 Searching with Gemini..."):
             result = call_gemini_agent(prompt)
             answer = result.get("output", "No response.")
             st.write(answer)
-    
+
+            # Show files context if available
+            files = result.get("files", [])
+            if files:
+                st.caption(f"📄 Files: {', '.join(files)}")
+
     st.session_state.log.append({"role": "assistant", "content": answer})
 
 # Footer
